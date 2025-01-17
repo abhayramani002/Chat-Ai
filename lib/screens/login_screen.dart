@@ -8,6 +8,8 @@ class LoginScreen extends StatelessWidget {
   final String validEmail = "user123@email.com";
   final String validPassword = "password123";
 
+  LoginScreen({super.key});
+
   void _login(BuildContext context) {
     final email = emailController.text.trim();
     final password = passwordController.text.trim();

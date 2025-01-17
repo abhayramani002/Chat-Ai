@@ -2,32 +2,56 @@ import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:hive/hive.dart';
+import '../widgets/sidebar.dart';
+import '../widgets/mic_popup.dart';
+import '../services/api_service.dart';
+import '../widgets/chat_messages.dart';
 
 class ChatScreen extends StatefulWidget {
   final String userEmail;
 
-  ChatScreen({required this.userEmail});
+  const ChatScreen({super.key, required this.userEmail});
 
   @override
   _ChatScreenState createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  late ScrollController _scrollController;
   final TextEditingController _messageController = TextEditingController();
   final List<Map<String, dynamic>> _messages = [];
   final FlutterTts _flutterTts = FlutterTts();
   late stt.SpeechToText _speechToText;
   late Box _chatBox;
-
+  bool _isLoading = false;
   bool _isListening = false;
   List<String> _chatSessions = [];
   String _currentSession = "";
+  bool _showScrollToBottom = false;
 
   @override
   void initState() {
     super.initState();
     _speechToText = stt.SpeechToText();
+    _scrollController = ScrollController();
+    _scrollController.addListener(() {
+      if (_scrollController.offset > 100) {
+        setState(() {
+          _showScrollToBottom = true;
+        });
+      } else {
+        setState(() {
+          _showScrollToBottom = false;
+        });
+      }
+    });
     _initializeHive();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _initializeHive() async {
@@ -55,7 +79,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _createNewChatSession() async {
-    if (_chatBox == null || !_chatBox.isOpen) {
+    if (!_chatBox.isOpen) {
       _chatBox = await Hive.openBox('chatBox');
     }
 
@@ -121,6 +145,21 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     });
+    Future.delayed(const Duration(milliseconds: 100), () {
+      _scrollToBottom();
+    });
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          0.0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   void _logout(BuildContext context) async {
@@ -157,20 +196,25 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _sendMessage() async {
     final userMessage = _messageController.text.trim();
     if (userMessage.isEmpty) return;
-
+    _scrollToBottom();
     setState(() {
       _messages.add({'sender': 'user', 'message': userMessage});
       _messageController.clear();
+      _isLoading = true;
     });
+    final List<Map<String, String>> messageHistory = _messages.map((msg) {
+      return {
+        "role": msg['sender'] == 'user' ? "user" : "assistant",
+        "content": msg['message'].toString(), // Ensure the content is a String
+      };
+    }).toList();
 
-    // Simulate AI response (Replace with API integration)
-    await Future.delayed(Duration(seconds: 2));
-    final aiResponse = "This is AI's response to: $userMessage";
-
+    final aiResponse = await ApiService.fetchAiResponse(messageHistory);
     setState(() {
       _messages.add({'sender': 'ai', 'message': aiResponse});
+      _isLoading = false;
     });
-
+    _scrollToBottom();
     await _saveChatHistory();
   }
 
@@ -180,94 +224,12 @@ class _ChatScreenState extends State<ChatScreen> {
     await _flutterTts.speak(text);
   }
 
-  Widget _buildSidebar() {
-    return Drawer(
-      child: Column(
-        children: [
-          UserAccountsDrawerHeader(
-            accountName: Text(widget.userEmail.split('@')[0]),
-            accountEmail: Text(widget.userEmail),
-            currentAccountPicture: CircleAvatar(
-              backgroundColor: Colors.teal,
-              child: Text(
-                widget.userEmail[0].toUpperCase(),
-                style: TextStyle(fontSize: 24, color: Colors.white),
-              ),
-            ),
-          ),
-          Expanded(
-            child: ListView(
-              children: [
-                for (var session in _chatSessions)
-                  Container(
-                    color: _currentSession == session
-                        ? Colors.grey[300]
-                        : Colors.transparent,
-                    child: ListTile(
-                      title: Text(
-                        session,
-                        style: TextStyle(
-                          fontWeight: _currentSession == session
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                        ),
-                      ),
-                      trailing: IconButton(
-                        icon: Icon(Icons.delete, color: Colors.red),
-                        onPressed: () => _deleteChatSession(session),
-                      ),
-                      onTap: () => _loadChatSession(session),
-                    ),
-                  ),
-                ListTile(
-                  leading: Icon(Icons.add),
-                  title: Text("New Chat"),
-                  onTap: _createNewChatSession,
-                ),
-              ],
-            ),
-          ),
-          Divider(),
-          ListTile(
-            leading: Icon(Icons.logout, color: Colors.red),
-            title: Text("Logout"),
-            onTap: () => _logout(context),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _openMicPopup() {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        child: Container(
-          padding: EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.mic, size: 60, color: Colors.redAccent),
-              SizedBox(height: 10),
-              Text("Listening...", style: TextStyle(fontSize: 16)),
-              SizedBox(height: 20),
-              ElevatedButton.icon(
-                onPressed: () {
-                  _stopListening();
-
-                  Navigator.pop(context);
-                },
-                icon: Icon(Icons.stop, color: Colors.white),
-                label: Text("Stop"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
-                ),
-              ),
-            ],
-          ),
-        ),
+      builder: (context) => MicPopup(
+        onStopListening: _stopListening,
       ),
     );
 
@@ -276,100 +238,99 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text("Chat with AI"),
-        backgroundColor: Colors.teal,
-      ),
-      drawer: _buildSidebar(),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              itemCount: _messages.length,
-              itemBuilder: (context, index) {
-                final message = _messages[index];
-                final isUser = message['sender'] == 'user';
-                return Align(
-                  alignment:
-                      isUser ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    margin: EdgeInsets.symmetric(vertical: 5, horizontal: 10),
-                    padding: EdgeInsets.all(12),
-                    constraints: BoxConstraints(maxWidth: 250),
-                    decoration: BoxDecoration(
-                      color: isUser ? Colors.green[100] : Colors.grey[300],
-                      borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(10),
-                        topRight: Radius.circular(10),
-                        bottomLeft: isUser ? Radius.circular(10) : Radius.zero,
-                        bottomRight: isUser ? Radius.zero : Radius.circular(10),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(width: !isUser ? 8 : 0),
-                        Flexible(
-                          child: Text(
-                            message['message'],
-                            textAlign: TextAlign.left,
-                            style: TextStyle(
-                              color: Colors.black87,
-                            ),
+    return Stack(
+      children: [
+        Scaffold(
+          appBar: AppBar(
+            title: Text("Chat with AI"),
+            backgroundColor: Colors.teal,
+          ),
+          drawer: Sidebar(
+            userEmail: widget.userEmail,
+            chatSessions: _chatSessions,
+            currentSession: _currentSession,
+            onSessionTap: _loadChatSession,
+            onDeleteSession: _deleteChatSession,
+            onCreateNewSession: _createNewChatSession,
+            onLogout: () => _logout(context),
+          ),
+          body: SafeArea(
+            child: Column(
+              children: [
+                Expanded(
+                  child: Stack(
+                    children: [
+                      if (_messages.isEmpty)
+                        Center(
+                          child: Image.asset(
+                            'assets/gif/robot.gif',
+                            fit: BoxFit.contain,
                           ),
                         ),
-                        if (isUser) SizedBox(width: 8),
-                        if (!isUser)
-                          IconButton(
-                            icon: Icon(Icons.volume_up, color: Colors.teal),
-                            onPressed: () {
-                              _speak(message['message']);
-                            },
-                          ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          Container(
-            padding: EdgeInsets.all(8),
-            color: Colors.grey[200],
-            child: Row(
-              children: [
-                GestureDetector(
-                  onTap: _openMicPopup,
-                  child: Icon(
-                    Icons.mic,
-                    color: Colors.redAccent,
-                    size: 30,
+                      if (_messages.isNotEmpty || _isLoading)
+                        ChatMessages(
+                          messages: _messages,
+                          onSpeakMessage: _speak,
+                          scrollController: _scrollController,
+                          isLoading: _isLoading,
+                          userEmail: widget.userEmail,
+                        ),
+                    ],
                   ),
                 ),
-                SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration: InputDecoration(
-                      hintText: "Type your message",
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
+                Container(
+                  padding: EdgeInsets.all(8),
+                  color: Colors.grey[200],
+                  child: Row(
+                    children: [
+                      GestureDetector(
+                        onTap: _openMicPopup,
+                        child: Icon(
+                          Icons.mic,
+                          color: Colors.redAccent,
+                          size: 30,
+                        ),
                       ),
-                      contentPadding: EdgeInsets.symmetric(horizontal: 12),
-                    ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          autofocus: false,
+                          controller: _messageController,
+                          maxLines: 3,
+                          minLines: 1,
+                          keyboardType: TextInputType.multiline,
+                          decoration: InputDecoration(
+                            hintText: "Type your message",
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      IconButton(
+                        icon: Icon(Icons.send, color: Colors.teal),
+                        onPressed: _sendMessage,
+                      ),
+                    ],
                   ),
-                ),
-                SizedBox(width: 8),
-                IconButton(
-                  icon: Icon(Icons.send, color: Colors.teal),
-                  onPressed: _sendMessage,
                 ),
               ],
             ),
           ),
-        ],
-      ),
+        ),
+        if (_showScrollToBottom)
+          Positioned(
+            bottom: 70,
+            right: 20,
+            child: FloatingActionButton(
+              onPressed: _scrollToBottom,
+              child: Icon(Icons.arrow_downward),
+            ),
+          ),
+      ],
     );
   }
 }
