@@ -12,12 +12,12 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController emailController = TextEditingController();
-  final TextEditingController passwordController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
 
   Future<void> _login(BuildContext context) async {
-    final email = emailController.text.trim();
-    final password = passwordController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
 
     try {
       // Authenticate with Firebase
@@ -89,7 +89,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             SizedBox(height: 8),
             TextField(
-              controller: emailController,
+              controller: _emailController,
               decoration: InputDecoration(
                 prefixIcon: Icon(Icons.email),
                 hintText: 'Enter your email',
@@ -109,7 +109,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             SizedBox(height: 8),
             TextField(
-              controller: passwordController,
+              controller: _passwordController,
               obscureText: true,
               decoration: InputDecoration(
                 hintText: "Enter your password",

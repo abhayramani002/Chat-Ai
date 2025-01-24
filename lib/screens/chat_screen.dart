@@ -220,7 +220,8 @@ class _ChatScreenState extends State<ChatScreen> {
       };
     }).toList();
 
-    final aiResponse = await ApiService.fetchAiResponse(messageHistory);
+    final aiResponse =
+        await ApiService.fetchAiResponseFromOpenAI(messageHistory);
     setState(() {
       _messages.add({'sender': 'ai', 'message': aiResponse});
       _isLoading = false;
