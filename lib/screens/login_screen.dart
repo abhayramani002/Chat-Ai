@@ -1,33 +1,55 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:hive/hive.dart';
 
-class LoginScreen extends StatelessWidget {
+import 'chat_screen.dart';
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController emailController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
 
-  // Hardcoded credentials
-  final String validEmail = "user123@email.com";
-  final String validPassword = "password123";
-
-  LoginScreen({super.key});
-
-  void _login(BuildContext context) {
+  Future<void> _login(BuildContext context) async {
     final email = emailController.text.trim();
     final password = passwordController.text.trim();
 
-    if (email == validEmail && password == validPassword) {
-      // Navigate to ChatScreen with email as argument
-      Navigator.pushReplacementNamed(
+    try {
+      // Authenticate with Firebase
+      final UserCredential userCredential = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(email: email, password: password);
+
+      final user = userCredential.user;
+      if (user != null) {
+        // Create a new chat session on login
+        final chatBox = await Hive.openBox('chatBox');
+        if (!chatBox.containsKey(user.uid)) {
+          chatBox.put(user.uid, {
+            'sessions': ['Chat 1'],
+            'Chat 1': [],
+          });
+        }
+      }
+      Navigator.pushReplacement(
         context,
-        '/chat',
-        arguments: email,
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Invalid email or password!'),
-          backgroundColor: Colors.red,
+        MaterialPageRoute(
+          builder: (context) => ChatScreen(isLogin: true),
         ),
       );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Login failed: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 

@@ -1,3 +1,4 @@
+import 'package:chat_ai/screens/login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
@@ -6,12 +7,11 @@ import '../widgets/sidebar.dart';
 import '../widgets/mic_popup.dart';
 import '../services/api_service.dart';
 import '../widgets/chat_messages.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ChatScreen extends StatefulWidget {
-  final String userEmail;
-
-  const ChatScreen({super.key, required this.userEmail});
-
+  final bool isLogin;
+  const ChatScreen({super.key, required this.isLogin});
   @override
   _ChatScreenState createState() => _ChatScreenState();
 }
@@ -28,6 +28,7 @@ class _ChatScreenState extends State<ChatScreen> {
   List<String> _chatSessions = [];
   String _currentSession = "";
   bool _showScrollToBottom = false;
+  String? userEmail;
 
   @override
   void initState() {
@@ -45,7 +46,13 @@ class _ChatScreenState extends State<ChatScreen> {
         });
       }
     });
-    _initializeHive();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      userEmail = user.email;
+      _initializeChat();
+    } else {
+      Navigator.pushReplacementNamed(context, '/login');
+    }
   }
 
   @override
@@ -54,91 +61,86 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  Future<void> _initializeHive() async {
+  Future<void> _initializeChat() async {
     _chatBox = await Hive.openBox('chatBox');
-    if (_chatBox.containsKey(widget.userEmail)) {
-      final userData = _chatBox.get(widget.userEmail);
+    if (userEmail != null && _chatBox.containsKey(userEmail)) {
+      final userData = _chatBox.get(userEmail);
       setState(() {
         _chatSessions = List<String>.from(userData['sessions'] ?? []);
       });
+      if (widget.isLogin) {
+        await _createNewChatSession();
+      } else if (_chatSessions.isNotEmpty) {
+        _currentSession = _chatSessions.first;
+        await _loadChatSession(_currentSession);
+      }
+    } else if (userEmail != null) {
+      await _createNewChatSession();
     }
-    // Always start a new chat session on login
-    await _createNewChatSession();
   }
 
   Future<void> _saveChatHistory() async {
-    final userData =
-        _chatBox.get(widget.userEmail, defaultValue: {'sessions': []});
+    if (userEmail == null) return;
+    final userData = _chatBox.get(userEmail, defaultValue: {'sessions': []});
     userData['sessions'] = _chatSessions;
-
     // Ensure messages are properly saved as List<Map<String, dynamic>>
     userData[_currentSession] =
         _messages.map((e) => Map<String, dynamic>.from(e)).toList();
 
-    await _chatBox.put(widget.userEmail, userData);
+    await _chatBox.put(userEmail, userData);
   }
 
   Future<void> _createNewChatSession() async {
-    if (!_chatBox.isOpen) {
-      _chatBox = await Hive.openBox('chatBox');
-    }
-
+    if (userEmail == null) return;
     final newSession = "Chat ${_chatSessions.length + 1}";
     setState(() {
       _chatSessions.add(newSession);
       _currentSession = newSession;
       _messages.clear();
     });
-
-    await _saveChatHistory();
+    final userData = _chatBox.get(userEmail, defaultValue: {'sessions': []});
+    userData['sessions'] = _chatSessions;
+    userData[newSession] = [];
+    await _chatBox.put(userEmail, userData);
+    _loadChatSession(newSession);
   }
 
   Future<void> _deleteChatSession(String session) async {
-    final userData = _chatBox.get(widget.userEmail);
-
-    // Remove the session and its messages
+    if (userEmail == null) return;
+    final userData = _chatBox.get(userEmail);
     userData.remove(session);
     _chatSessions.remove(session);
-
-    // Renumber the remaining chat sessions
     final updatedSessions = <String>[];
     final updatedMessages = {};
-
     for (int i = 0; i < _chatSessions.length; i++) {
       final newSessionName = "Chat ${i + 1}";
       updatedSessions.add(newSessionName);
-
-      // Update the session messages with the new session name
-      updatedMessages[newSessionName] =
-          userData[_chatSessions[i]] ?? []; // Preserve existing messages
-      userData.remove(_chatSessions[i]); // Remove old session name
+      updatedMessages[newSessionName] = userData[_chatSessions[i]] ?? [];
+      userData.remove(_chatSessions[i]);
     }
-
-    // Save the updated sessions and messages
     userData['sessions'] = updatedSessions;
     userData.addAll(updatedMessages);
     _chatSessions = updatedSessions;
-
     if (_currentSession == session) {
-      // Load the first available session or create a new one
       if (_chatSessions.isNotEmpty) {
         _loadChatSession(_chatSessions.first);
       } else {
         await _createNewChatSession();
       }
     }
-
-    await _chatBox.put(widget.userEmail, userData);
+    await _chatBox.put(userEmail, userData);
     setState(() {});
   }
 
-  void _loadChatSession(String session) {
+  Future<void> _loadChatSession(String session) async {
+    if (userEmail == null) return;
     setState(() {
       _currentSession = session;
+      _showScrollToBottom = false;
       _messages.clear();
-
-      // Safely convert the retrieved data to List<Map<String, dynamic>>
-      final rawMessages = _chatBox.get(widget.userEmail)[session] ?? [];
+    });
+    final rawMessages = _chatBox.get(userEmail)[session] ?? [];
+    setState(() {
       _messages.addAll(
         List<Map<String, dynamic>>.from(
           rawMessages.map((e) => Map<String, dynamic>.from(e)),
@@ -163,8 +165,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _logout(BuildContext context) async {
+    await FirebaseAuth.instance.signOut();
     await Hive.close();
-    Navigator.pushReplacementNamed(context, '/login');
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LoginScreen(),
+      ),
+    );
   }
 
   Future<void> _startListening() async {
@@ -172,15 +180,18 @@ class _ChatScreenState extends State<ChatScreen> {
       bool available = await _speechToText.initialize();
       if (available) {
         setState(() => _isListening = true);
+        final options = stt.SpeechListenOptions(
+          listenMode: stt.ListenMode.dictation,
+          partialResults: true,
+          cancelOnError: false,
+        );
         _speechToText.listen(
           onResult: (result) {
             setState(() {
               _messageController.text = result.recognizedWords;
             });
           },
-          listenMode: stt.ListenMode.dictation,
-          partialResults: true,
-          cancelOnError: false,
+          listenOptions: options,
         );
       }
     }
@@ -246,7 +257,7 @@ class _ChatScreenState extends State<ChatScreen> {
             backgroundColor: Colors.teal,
           ),
           drawer: Sidebar(
-            userEmail: widget.userEmail,
+            userEmail: userEmail ?? "Guest",
             chatSessions: _chatSessions,
             currentSession: _currentSession,
             onSessionTap: _loadChatSession,
@@ -273,7 +284,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           onSpeakMessage: _speak,
                           scrollController: _scrollController,
                           isLoading: _isLoading,
-                          userEmail: widget.userEmail,
+                          userEmail: userEmail ?? "Guest",
                         ),
                     ],
                   ),
@@ -323,7 +334,7 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         if (_showScrollToBottom)
           Positioned(
-            bottom: 70,
+            bottom: 90,
             right: 20,
             child: FloatingActionButton(
               onPressed: _scrollToBottom,
